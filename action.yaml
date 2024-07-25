@@ -72,46 +72,23 @@ runs:
       uses: docker/setup-qemu-action@v3.1.0
 
     - name: Run Fossology scan in Docker
+      env:
+        GITHUB_API_URL: ${{ inputs.github_api_url }}
+        GITHUB_REPOSITORY: ${{ inputs.github_repository }}
+        GITHUB_TOKEN: ${{ inputs.github_token }}
+        GITHUB_PULL_REQUEST: ${{ inputs.github_pull_request }}
+        GITHUB_REPO_URL: ${{ inputs.github_repo_url }}
+        GITHUB_REPO_OWNER: ${{ inputs.github_repo_owner }}
+        GITHUB_WORKSPACE: ${{ inputs.github_workspace }}
+        SCAN_MODE: ${{ inputs.scan_mode }}
+        SCANNERS: ${{ inputs.scanners }}
+        REPORT_FORMAT: ${{ inputs.report_format }}
+        KEYWORD_CONF_FILE_PATH: ${{ inputs.keyword_conf_file_path }}
+        ALLOWLIST_FILE_PATH: ${{ inputs.allowlist_file_path }}
+        FROM_TAG: ${{ inputs.from_tag }}
+        TO_TAG: ${{ inputs.to_tag }}
+      run: $GITHUB_ACTION_PATH/script.sh
       shell: bash
-      run: |
-        # Prepare docker run command with arguments
-        docker_cmd="docker run --rm --name fossologyscanner -w /opt/repo -v ${PWD}:/opt/repo \
-            -e GITHUB_TOKEN=${{ inputs.github_token }} \
-            -e GITHUB_PULL_REQUEST=${{ inputs.github_pull_request }} \
-            -e GITHUB_REPOSITORY=${{ inputs.github_repository }} \
-            -e GITHUB_API=${{ inputs.github_api_url }} \
-            -e GITHUB_REPO_URL=${{ inputs.github_repo_url }} \
-            -e GITHUB_REPO_OWNER=${{ inputs.github_repo_owner }} \
-            -e GITHUB_ACTIONS"
-        
-        if [ "$KEYWORD_CONF_FILE_PATH" != "" ]; then
-        docker_cmd+=" -v ${{ github.workspace }}/${{ inputs.keyword_conf_file_path }}:/bin/${{ inputs.keyword_conf_file_path}}"
-        fi
-        if [ "${{ inputs.allowlist_file_path }}" != "" ]; then
-        docker_cmd+=" -v ${{ github.workspace }}/${{ inputs.allowlist_file_path}}:/bin/${{ inputs.allowlist_file_path }}"
-        fi
-
-        docker_cmd+=" fossology/fossology:scanner /bin/fossologyscanner"
-        docker_cmd+=" ${{ inputs.scanners }}"
-        docker_cmd+=" ${{ inputs.scan_mode }}"
-
-        # Add additional conditions
-        if [ "${{ inputs.scan_mode }}" == "differential" ]; then
-        docker_cmd+=" --tags ${{ inputs.from_tag }} ${{ inputs.to_tag }}"
-        fi
-        if [ "${{ inputs.keyword_conf_file_path }}" != "" ]; then
-        docker_cmd+=" --keyword-conf ${{ inputs.keyword_conf_file_path }}"
-        fi
-        if [ "${{ inputs.allowlist_file_path }}" != "" ]; then
-        docker_cmd+=" --allowlist-path ${{ inputs.allowlist_file_path }}"
-        fi
-        if [ "${{ inputs.report_format }}" != "" ]; then
-        docker_cmd+=" --report ${{ inputs.report_format }}"
-        fi
-
-        # Run the command
-        echo $docker_cmd
-        eval $docker_cmd
 
     - name: Upload Scan Results Artifact
       if: success() || failure()
