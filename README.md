@@ -147,7 +147,7 @@ jobs:
       id: compliance
       uses: fossology/fossology-action@v1
       with:
-        scan-mode: 'differential'
+        scan_mode: 'differential'
         scanners: 'nomos ojo copyright keyword'
         from_tag: 'v003'
         to_tag: 'v004'
