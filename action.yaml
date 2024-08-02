@@ -1,0 +1,98 @@
+# SPDX-FileCopyrightText: 2024 Rajul Jha <rajuljha49@gmail.com>
+#
+# SPDX-License-Identifier: GPL-2.0-only
+
+name: "FOSSology Scan"
+description: "Run license and copyright scans"
+author: "Rajul Jha"
+branding:
+  icon: "search"
+  color: "orange"
+inputs:
+  # Customizable input variables
+  scan_mode:
+    description: "Whether to do diff scans or repo scan. Leave blank for diff."
+    required: false
+    default: ""
+  scanners:
+    description: "Which scanners to invoke"
+    required: false
+    default: "nomos ojo copyright keyword"
+  report_format:
+    description: "Report format to generate reports in: SPDX_JSON, SPDX_YAML, SPDX_RDF, SPDX_TAG_VALUE"
+    required: false
+    default: ""
+  keyword_conf_file_path:
+    description: "Path to custom keyword.conf file"
+    required: false
+    default: ""
+  allowlist_file_path:
+    description: "Path to allowlist.json file"
+    required: false
+    default: ""
+  from_tag:
+    description: "Starting tag to scan from"
+    required: false
+    default: ""
+  to_tag:
+    description: "Ending tag to scan to"
+    required: false
+    default: ""
+# Internal Variables. Not meant to be passed by the user. These are set up by the action itself.
+  github_api_url:
+    description: "Base URL of Github API"
+    required: false
+    default: ${{ github.api_url }}
+  github_repository:
+    description: "Repository name"
+    required: false
+    default: ${{ github.repository }}
+  github_token:
+    description: "Github Token"
+    required: false
+    default: ${{ github.token }}
+  github_pull_request:
+    description: "Github PR"
+    required: false
+    default: ${{ github.event.number }}
+  github_repo_url:
+    description: "Github Repo URL"
+    required: false
+    default: ${{ github.repositoryUrl }}
+  github_repo_owner:
+    description: "Github Repo Owner"
+    required: false
+    default: ${{ github.repository_owner }}
+
+runs:
+  using: "composite"
+  steps:
+
+    - name: Docker Setup QEMU
+      uses: docker/setup-qemu-action@v3.1.0
+
+    - name: Run Fossology scan in Docker
+      env:
+        GITHUB_API_URL: ${{ inputs.github_api_url }}
+        GITHUB_REPOSITORY: ${{ inputs.github_repository }}
+        GITHUB_TOKEN: ${{ inputs.github_token }}
+        GITHUB_PULL_REQUEST: ${{ inputs.github_pull_request }}
+        GITHUB_REPO_URL: ${{ inputs.github_repo_url }}
+        GITHUB_REPO_OWNER: ${{ inputs.github_repo_owner }}
+        GITHUB_WORKSPACE: ${{ inputs.github_workspace }}
+        SCAN_MODE: ${{ inputs.scan_mode }}
+        SCANNERS: ${{ inputs.scanners }}
+        REPORT_FORMAT: ${{ inputs.report_format }}
+        KEYWORD_CONF_FILE_PATH: ${{ inputs.keyword_conf_file_path }}
+        ALLOWLIST_FILE_PATH: ${{ inputs.allowlist_file_path }}
+        FROM_TAG: ${{ inputs.from_tag }}
+        TO_TAG: ${{ inputs.to_tag }}
+      run: $GITHUB_ACTION_PATH/script.sh
+      shell: bash
+
+    - name: Upload Scan Results Artifact
+      if: success() || failure()
+      uses: actions/upload-artifact@v3
+      with:
+        name: Fossology scan results
+        path: results/
