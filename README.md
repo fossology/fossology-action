@@ -37,6 +37,14 @@ The **Fossology Scan** GitHub Action allows you to run license and copyright sca
   - **Repo Scan**: This scans the entire repo from which the pipeline is triggered. It is a good option to run on PR's or publishing releases.
   - **Differential Scan**: This scans for the changes between any two tags. User can provide any tow tags to scan between. It is a good option to scan between any two tags or any two versions of the repo.
 
+### Per-Dependency Report Generation (NEW)
+The action now supports generating individual SBOM reports for each dependency scanned. This is useful for:
+- **Capycli/SW360 Integration**: Upload individual scan reports per component to your CAP system
+- **Fine-grained Compliance**: Track license compliance per dependency
+- **Audit Trails**: Maintain separate reports for each component in your inventory
+
+Enable with `per_dependency_report: true` to generate individual reports in the `per-dependency-reports` directory.
+
 You can learn more about CI Scanners in fossology [here](https://github.com/fossology/fossology/wiki/FOSSology-scanners-in-CI)
 
 ## Inputs
@@ -52,7 +60,7 @@ scanners:
   required: false
   default: "nomos ojo copyright keyword"
 report_format:
-  description: "Report format to generate reports in: TEXT, SPDX_JSON, SPDX_YAML, SPDX_RDF, SPDX_TAG_VALUE"
+  description: "Report format to generate reports in: TEXT, SPDX_JSON, SPDX_YAML, SPDX_RDF, SPDX_TAG_VALUE, SPDX3_JSON, SPDX3_TTL, SPDX3_RDF"
   required: false
   default: "TEXT"
 keyword_conf_file_path:
@@ -79,6 +87,14 @@ scan_dir:
   description: "If in scan-dir mode, path of the directory to scan."
   required: false
   default: ""
+per_dependency_report:
+  description: "Generate individual SBOM reports per dependency after scanning. Set to 'true' to enable."
+  required: false
+  default: "false"
+report_dir:
+  description: "Output directory for per-dependency reports."
+  required: false
+  default: "per-dependency-reports"
 ```
 
 ### Inputs used internally by the action:
@@ -232,6 +248,106 @@ jobs:
         with:
           name: Fossology scan results
           path: results/
+```
+
+### Dependency Scans with Per-Dependency Reports (Capycli/SW360 Integration)
+```yaml
+name: SCA with Per-Dependency Reports
+
+on:
+  push:
+    paths:
+      - pyproject.toml
+      - poetry.lock
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  sbom:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: 'pip'
+
+      - name: Install CDX Python
+        run: python3 -m pip install cyclonedx-bom
+
+      - name: Generate CDX SBOM
+        run: python3 -m cyclonedx_py poetry --spec-version 1.6 --output-format JSON --output-file sbom.json --validate
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: sbom.json
+          if-no-files-found: error
+
+  sca:
+    runs-on: ubuntu-latest
+    needs: sbom
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Download SBOM
+        uses: actions/download-artifact@v4
+        with:
+          name: sbom
+
+      - name: Run FOSSology analysis with per-dependency reports
+        id: fossology
+        uses: fossology/fossology-action@v1
+        with:
+          scan_mode: "scan-only-deps"
+          scanners: |
+            - nomos
+            - ojo
+            - copyright
+          report_format: "SPDX_JSON"
+          sbom_path: "sbom.json"
+          per_dependency_report: "true"
+          report_dir: "per-dependency-reports"
+
+      - name: Upload Consolidated Scan Results
+        if: success() || failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Fossology consolidated report
+          path: results/
+
+      - name: Upload Per-Dependency Reports
+        if: success() || failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Fossology per-dependency reports
+          path: per-dependency-reports/
+
+  capycli-upload:
+    runs-on: ubuntu-latest
+    needs: sca
+    steps:
+      - name: Download Per-Dependency Reports
+        uses: actions/download-artifact@v4
+        with:
+          name: Fossology per-dependency reports
+          path: per-dependency-reports/
+
+      - name: Upload reports to CAP/SW360 using Capycli
+        run: |
+          # Upload each per-dependency report to the CAP system
+          for report in per-dependency-reports/*.spdx.json; do
+            if [ "$(basename $report)" != "manifest.json" ]; then
+              echo "Uploading: $report"
+              # capycli upload report --file "$report" --component "$(basename $report)"
+            fi
+          done
 ```
 
 ## License

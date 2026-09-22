@@ -2,8 +2,8 @@
 #
 # SPDX-License-Identifier: GPL-2.0-only
 
-name: "FOSSology Scan"
-description: "Run license and copyright scans"
+name: "FOSSology Scan + SPDX 3.0"
+description: "Run license and copyright scans with SPDX 3.0 JSON-LD report generation and per-dependency reports"
 author: "Rajul Jha"
 branding:
   icon: "search"
@@ -19,7 +19,7 @@ inputs:
     required: false
     default: "nomos ojo copyright keyword"
   report_format:
-    description: "Report format to generate reports in: TEXT, SPDX_JSON, SPDX_YAML, SPDX_RDF, SPDX_TAG_VALUE"
+    description: "Report format to generate reports in: TEXT, SPDX_JSON, SPDX_YAML, SPDX_RDF, SPDX_TAG_VALUE, SPDX3_JSON, SPDX3_TTL, SPDX3_RDF"
     required: false
     default: "TEXT"
   keyword_conf_file_path:
@@ -46,6 +46,35 @@ inputs:
     description: "If in scan-dir mode, path of the directory to scan."
     required: false
     default: ""
+  per_dependency_report:
+    description: "Generate per-dependency SPDX reports (true/false). If true, splits the consolidated SPDX report into individual files per component."
+    required: false
+    default: "false"
+  report_dir:
+    description: "Output directory for per-dependency reports (default: per-dependency-reports)"
+    required: false
+    default: "per-dependency-reports"
+  # Dashboard Configuration
+  dashboard:
+    description: "Generate license compliance dashboard in GitHub Actions summary"
+    required: false
+    default: "true"
+  dashboard_charts:
+    description: "Include Mermaid charts in dashboard (pie and bar charts)"
+    required: false
+    default: "true"
+  dashboard_risk:
+    description: "Include risk analysis table in dashboard"
+    required: false
+    default: "true"
+  dashboard_unknown:
+    description: "Include unknown/unasserted licenses table in dashboard"
+    required: false
+    default: "true"
+  dashboard_copyrights:
+    description: "Include copyrights table in dashboard"
+    required: false
+    default: "true"
   # Internal Variables. Not meant to be passed by the user. These are set up by the action itself.
   github_api_url:
     description: "Base URL of Github API"
@@ -73,24 +102,159 @@ inputs:
     default: ${{ github.repository_owner }}
 
 runs:
-  using: 'docker'
-  image: 'docker://fossology/fossology:scanner'
-  env:
-    GITHUB_TOKEN: ${{ inputs.github_token }}
-    GITHUB_PULL_REQUEST: ${{ inputs.github_pull_request }}
-    GITHUB_REPOSITORY: ${{ inputs.github_repository }}
-    GITHUB_API: ${{ inputs.github_api_url }}
-    GITHUB_REPO_URL: ${{ inputs.github_repo_url }}
-    GITHUB_REPO_OWNER: ${{ inputs.github_repo_owner }}
-    GITHUB_ACTIONS: ${{ inputs.github_actions }}
-  args:
-    - >
-      /bin/fossologyscanner
-      ${{ inputs.scanners }}
-      ${{ inputs.scan_mode }}
-      ${{ inputs.scan_mode == 'differential' && format('--tags {0} {1}', inputs.from_tag, inputs.to_tag) || '' }}
-      ${{ inputs.keyword_conf_file_path != '' && format('--keyword-conf {0}', inputs.keyword_conf_file_path) || '' }}
-      ${{ inputs.allowlist_file_path != '' && format('--allowlist-path {0}', inputs.allowlist_file_path) || '' }}
-      --report ${{ inputs.report_format }}
-      ${{ inputs.scan_mode == 'scan-only-deps' && format('--sbom-path {0}', inputs.sbom_path) || '' }}
-      ${{ inputs.scan_mode == 'scan-dir' && format('--dir-path {0}', inputs.scan_dir) || '' }}
+  using: 'composite'
+  steps:
+    - name: Run FOSSology Scanner
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github_token }}
+        GITHUB_PULL_REQUEST: ${{ inputs.github_pull_request }}
+        GITHUB_REPOSITORY: ${{ inputs.github_repository }}
+        GITHUB_API_URL: ${{ inputs.github_api_url }}
+        GITHUB_REPO_URL: ${{ inputs.github_repo_url }}
+        GITHUB_REPO_OWNER: ${{ inputs.github_repo_owner }}
+        GITHUB_ACTIONS: "true"
+        SCANNERS: ${{ inputs.scanners }}
+        SCAN_MODE: ${{ inputs.scan_mode }}
+        FROM_TAG: ${{ inputs.from_tag }}
+        TO_TAG: ${{ inputs.to_tag }}
+        KEYWORD_CONF_FILE_PATH: ${{ inputs.keyword_conf_file_path }}
+        ALLOWLIST_FILE_PATH: ${{ inputs.allowlist_file_path }}
+        REPORT_FORMAT: ${{ inputs.report_format }}
+        SBOM_PATH: ${{ inputs.sbom_path }}
+        SCAN_DIR: ${{ inputs.scan_dir }}
+        PER_DEPENDENCY_REPORT: ${{ inputs.per_dependency_report }}
+        REPORT_DIR: ${{ inputs.report_dir }}
+        DASHBOARD: ${{ inputs.dashboard }}
+        DASHBOARD_CHARTS: ${{ inputs.dashboard_charts }}
+        DASHBOARD_RISK: ${{ inputs.dashboard_risk }}
+        DASHBOARD_UNKNOWN: ${{ inputs.dashboard_unknown }}
+        DASHBOARD_COPYRIGHTS: ${{ inputs.dashboard_copyrights }}
+      run: |
+        SCAN_MODE="${{ inputs.scan_mode }}"
+        SCANNERS="${{ inputs.scanners }}"
+        REPORT_FMT="${{ inputs.report_format }}"
+        SBOM_PATH="${{ inputs.sbom_path }}"
+
+        echo "=========================================="
+        echo "FOSSology Scanner"
+        echo "=========================================="
+        echo "Scan Mode:     $SCAN_MODE"
+        echo "Scanners:      $SCANNERS"
+        echo "Report Format: $REPORT_FMT"
+        echo "SBOM Path:     $SBOM_PATH"
+        echo "=========================================="
+
+        mkdir -p results
+
+        # Check Docker availability
+        if ! command -v docker &> /dev/null; then
+          echo "ERROR: Docker is not available. FOSSology scanner requires Docker."
+          exit 1
+        fi
+        docker info &> /dev/null || {
+          echo "ERROR: Docker daemon is not running."
+          exit 1
+        }
+        echo "Docker is available, running FOSSology scanner..."
+
+        # Build docker run command
+        # Run as root: the fossology/fossology:scanner image's default user
+        # (fossy) is not present in the container's passwd file in some
+        # environments, which makes Docker fail to start the container with
+        # "unable to find user fossy" (exit 125).
+        DOCKER_CMD="docker run --rm --name fossologyscanner \
+          --user root \
+          --entrypoint /bin/fossologyscanner \
+          -w /opt/repo \
+          -v ${PWD}:/opt/repo \
+          -e GITHUB_TOKEN=${GITHUB_TOKEN} \
+          -e GITHUB_PULL_REQUEST=${GITHUB_PULL_REQUEST} \
+          -e GITHUB_REPOSITORY=${GITHUB_REPOSITORY} \
+          -e GITHUB_API=${GITHUB_API_URL} \
+          -e GITHUB_REPO_URL=${GITHUB_REPO_URL} \
+          -e GITHUB_REPO_OWNER=${GITHUB_REPO_OWNER} \
+          -e GITHUB_ACTIONS=true"
+
+        # Mount GITHUB_STEP_SUMMARY for dashboard generation
+        if [ -n "${GITHUB_STEP_SUMMARY}" ]; then
+          DOCKER_CMD+=" -v ${GITHUB_STEP_SUMMARY}:/github/step_summary"
+          DOCKER_CMD+=" -e GITHUB_STEP_SUMMARY=/github/step_summary"
+        fi
+
+        # Pass dashboard configuration
+        DOCKER_CMD+=" -e DASHBOARD_ENABLED=${DASHBOARD:-true}"
+        DOCKER_CMD+=" -e DASHBOARD_CHARTS=${DASHBOARD_CHARTS:-true}"
+        DOCKER_CMD+=" -e DASHBOARD_RISK=${DASHBOARD_RISK:-true}"
+        DOCKER_CMD+=" -e DASHBOARD_UNKNOWN=${DASHBOARD_UNKNOWN:-true}"
+        DOCKER_CMD+=" -e DASHBOARD_COPYRIGHTS=${DASHBOARD_COPYRIGHTS:-true}"
+
+        # Mount keyword conf and allowlist if provided
+        if [ "${KEYWORD_CONF_FILE_PATH}" != "" ]; then
+          DOCKER_CMD+=" -v ${GITHUB_WORKSPACE}/${KEYWORD_CONF_FILE_PATH}:/bin/${KEYWORD_CONF_FILE_PATH}"
+        fi
+        if [ "${ALLOWLIST_FILE_PATH}" != "" ]; then
+          DOCKER_CMD+=" -v ${GITHUB_WORKSPACE}/${ALLOWLIST_FILE_PATH}:/bin/${ALLOWLIST_FILE_PATH}"
+        fi
+
+        # Image and positional args: scanners first, then scan_mode (matching upstream order)
+        DOCKER_CMD+=" fossology/fossology:scanner"
+        DOCKER_CMD+=" ${SCANNERS}"
+        DOCKER_CMD+=" ${SCAN_MODE}"
+
+        # Optional args
+        if [ "${SCAN_MODE}" == "differential" ] && [ -n "${FROM_TAG}" ]; then
+          DOCKER_CMD+=" --tags ${FROM_TAG} ${TO_TAG}"
+        fi
+        if [ "${KEYWORD_CONF_FILE_PATH}" != "" ]; then
+          DOCKER_CMD+=" --keyword-conf ${KEYWORD_CONF_FILE_PATH}"
+        fi
+        if [ "${ALLOWLIST_FILE_PATH}" != "" ]; then
+          DOCKER_CMD+=" --allowlist-path ${ALLOWLIST_FILE_PATH}"
+        fi
+        if [ "${REPORT_FMT}" != "" ]; then
+          DOCKER_CMD+=" --report ${REPORT_FMT}"
+        fi
+        if [ "${SCAN_MODE}" == "scan-only-deps" ] && [ -n "${SBOM_PATH}" ]; then
+          DOCKER_CMD+=" --sbom-path ${SBOM_PATH}"
+        fi
+        if [ "${SCAN_MODE}" == "scan-dir" ] && [ -n "${SCAN_DIR}" ]; then
+          DOCKER_CMD+=" --dir-path ${SCAN_DIR}"
+        fi
+
+        echo "Running: $DOCKER_CMD"
+        set +e
+        eval "$DOCKER_CMD"
+        SCANNER_EXIT_CODE=$?
+        set -e
+        echo "Scanner exited with code: $SCANNER_EXIT_CODE"
+
+        # Verify output.
+        # NOTE: fossologyscanner.py returns a non-zero, bitmasked exit code
+        # (e.g. 2 = license violation, 4 = copyright finding, 8 = keyword hit)
+        # to flag policy violations, but it still writes the SPDX report
+        # before exiting. A non-zero code here does NOT mean the scan/report
+        # generation failed - only that a policy check found something to
+        # flag. We must not let that fail this step, otherwise the
+        # "Generate per-dependency reports" step (and everything downstream,
+        # e.g. SW360 upload) gets skipped even though a valid report exists.
+        if [ -f "results/sbom_spdx.json" ]; then
+          SIZE=$(stat -c%s "results/sbom_spdx.json" 2>/dev/null || stat -f%z "results/sbom_spdx.json" 2>/dev/null)
+          echo "OK: results/sbom_spdx.json exists ($SIZE bytes)"
+          if [ "$SCANNER_EXIT_CODE" -ne 0 ]; then
+            echo "::warning::FOSSology scanner flagged policy violations (exit code $SCANNER_EXIT_CODE: bit 2=license, 4=copyright, 8=keyword). Report was still generated; continuing pipeline."
+          fi
+          exit 0
+        else
+          echo "ERROR: results/sbom_spdx.json not found - scanner failed to produce output"
+          exit 1
+        fi
+
+    - name: Generate per-dependency reports
+      if: inputs.per_dependency_report == 'true'
+      shell: bash
+      run: |
+        python "${{ github.action_path }}/scripts/generate_per_dependency_reports.py"
+      env:
+        REPORT_DIR: ${{ inputs.report_dir }}
+        REPORT_PATH: "results/sbom_spdx.json"
