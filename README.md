@@ -52,7 +52,7 @@ scanners:
   required: false
   default: "nomos ojo copyright keyword"
 report_format:
-  description: "Report format to generate reports in: TEXT, SPDX_JSON, SPDX_YAML, SPDX_RDF, SPDX_TAG_VALUE"
+  description: "Report format to generate reports in: TEXT, SPDX_JSON, SPDX_YAML, SPDX_RDF, SPDX_TAG_VALUE, SPDX3_JSON, SPDX3_TTL, SPDX3_RDF"
   required: false
   default: "TEXT"
 keyword_conf_file_path:
